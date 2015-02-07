@@ -40,7 +40,8 @@ regQuotesR = re.compile(u'([A-Za-zА-ЯЁа-яё0-9\\-\'`´‘’‛/@.,-‒–�
 
 # Abbreviations
 
-abbrs = {u'т', u'д', u'п', u'г', u'е', u'ч', u'л', u'н', u'тыс'}
+abbr_puncts, abbr_names, pref, endings = [], [], [], []
+
 # для сокращений и т.д., и т.п., т.е., 2014 г., в т.ч., какой-л., какой-н.
 
 hPrs = HTMLParser.HTMLParser()
@@ -50,7 +51,7 @@ class Token:
     dictAna = {}
 
     def __init__(self, token):
-        token = token.replace(u'\r\n', u'\\n').replace(u'\n', u'\\n').replace(u'\r', u'').strip()
+        token = token.replace(u'\r\n', u'\n').replace(u'\r', u'').strip()
         self.text = token
         self.tokenType = u'wf'
         self.sentencePos = u''
@@ -139,6 +140,24 @@ class Text:
             if self.wfs[i].tokenType == u'wf':
                 return self.wfs[i]
         return None
+
+    def check_hyphen(self, text):
+        if '-' not in text:
+            return True
+        if text in abbr_names:
+            return True
+        words = text.split('-')
+        if words[0] in pref:
+            return True
+        if words[1] in endings:
+            return True
+        if all(i[0].isupper() for i in words if i != ''):
+            return True
+        if all(all(i.isdigit() for i in word) for word in words[:2]):
+            return False
+        if all(i.isdigit() for i in words[0]):
+            return True
+        return False
     
     def tokenize(self):
         self.rawTokens = self.text.split(u' ')
@@ -157,22 +176,52 @@ class Text:
                     self.wfs[-1].define_type()
                 continue
             puncl = Token(m.group(1))
-            wf = Token(m.group(2))
-            puncr = Token(m.group(3))
             if len(puncl.text) > 0:
                 self.wfs.append(puncl)
                 self.wfs[-1].tokenType = u'punc'
-            if wf.text in u'\r\n':
-                wf.text = u'\r\n'
-                self.wfs.append(wf)
-                self.wfs[-1].tokenType = u'punc'
-            elif len(wf.text) > 0:
-                self.wfs.append(wf)
-                totalWords += 1
-                self.wfs[-1].define_type()
+
+            middle_wf = m.group(2)
+            if self.check_hyphen(middle_wf):
+                wf = Token(middle_wf)
+                if wf.text in u'\r\n':
+                    wf.text = u'\r\n'
+                    self.wfs.append(wf)
+                    self.wfs[-1].tokenType = u'punc'
+                elif len(wf.text) > 0:
+                    self.wfs.append(wf)
+                    totalWords += 1
+                    self.wfs[-1].define_type()
+            else:
+                parts = middle_wf.split('-')
+                wf = Token(parts[0])
+                if wf.text in u'\r\n':
+                    wf.text = u'\r\n'
+                    self.wfs.append(wf)
+                    self.wfs[-1].tokenType = u'punc'
+                elif len(wf.text) > 0:
+                    self.wfs.append(wf)
+                    totalWords += 1
+                    self.wfs[-1].define_type()
+                for part in parts[1:]:
+                    puncl = Token('-')
+                    if len(puncl.text) > 0:
+                        self.wfs.append(puncl)
+                        self.wfs[-1].tokenType = u'punc'
+                    wf = Token(part)
+                    if wf.text in u'\r\n':
+                        wf.text = u'\r\n'
+                        self.wfs.append(wf)
+                        self.wfs[-1].tokenType = u'punc'
+                    elif len(wf.text) > 0:
+                        self.wfs.append(wf)
+                        totalWords += 1
+                        self.wfs[-1].define_type()
+
+            puncr = Token(m.group(3))
             if len(puncr.text) > 0:
                 self.wfs.append(puncr)
                 self.wfs[-1].tokenType = u'punc'
+
         self.wordsCnt = totalWords
         return totalWords
 
@@ -191,7 +240,7 @@ class Text:
                 if prevWord is not None and\
                    wordR is not None and len(wordR.text) > 0 and\
                    (wordR.text[0].isupper() or wordR.text[0].isdigit()) and\
-                   (prevWord.text not in abbrs and (len(prevWord.text) > 1 or\
+                   (prevWord.text not in abbr_puncts and (len(prevWord.text) > 1 or\
                     prevWord.text.islower())):
                     if prevWord.sentencePos == u'':
                         prevWord.sentencePos = u'eos'
@@ -260,7 +309,14 @@ class Text:
 
 class Corpus:
     def __init__(self):
-        self.meta = {}
+        pairs = [(u'lists/abbr_puncts.txt', abbr_puncts), (u'lists/abbr.txt', abbr_names),
+                 (u'lists/prefixes.txt', pref), (u'lists/endings.txt', endings)]
+        for fname, arrname in pairs:
+            f = codecs.open(fname, 'r', 'utf-8')
+            for line in f:
+                line = line.strip()
+                arrname.append(line)
+            f.close()
         
     def process_dir(self, dirname, outdirname, restricted=None):
         if restricted is None:
@@ -270,7 +326,7 @@ class Corpus:
         for root, dirs, files in os.walk(dirname):
             curdirnames = set(re.findall(u'[^/\\\\]+', root, flags=re.U))
             if len(curdirnames & restricted) > 0:
-                print u'Skipping ' + root
+                # print u'Skipping ' + root
                 continue
             print u'Processing %s : currently %s words.' % (root, totalWords)
             for fname in files:
@@ -294,5 +350,5 @@ class Corpus:
 
 
 c = Corpus()
-totalWords = c.process_dir(u'.', u'outdir', [u'outdir', u'thatAreNotToBe', u'read'])
+totalWords = c.process_dir(u'.', u'outdir', [u'lists', u'.git', u'.idea', u'outdir'])
 print u'The texts have been processed,', totalWords, u'words total.'
